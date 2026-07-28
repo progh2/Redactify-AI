@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
-import { Search, CheckSquare, Square, EyeOff, Layers, Trash2, ShieldCheck, Sparkles, Filter, ChevronRight, CheckCircle2, RotateCcw } from 'lucide-react';
+import { Search, CheckSquare, Square, EyeOff, Layers, ShieldCheck, Sparkles, RotateCcw, Bot, MessageSquareText } from 'lucide-react';
+import RAGAssistantTab from './RAGAssistantTab';
 
 export default function Sidebar({
   detections,
   patterns,
   ignoredTerms,
   currentPage,
+  ragChunks,
+  config,
   onSelectDetection,
   onToggleDetectionStatus,
   onToggleAllDetections,
@@ -14,11 +17,10 @@ export default function Sidebar({
   onApplyPatternMasking,
   onJumpToPage,
 }) {
-  const [activeTab, setActiveTab] = useState('detections'); // detections, patterns, exceptions
+  const [activeTab, setActiveTab] = useState('detections'); // detections, rag, patterns, exceptions
   const [filterType, setFilterType] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Filter detections based on search & filterType
   const filteredDetections = detections.filter((item) => {
     if (filterType !== 'ALL' && item.type !== filterType && item.category !== filterType) return false;
     if (searchQuery && !item.detectedText.toLowerCase().includes(searchQuery.toLowerCase())) return false;
@@ -33,6 +35,7 @@ export default function Sidebar({
       <div className="flex border-b border-slate-800 bg-slate-900/60 p-1.5 gap-1">
         {[
           { id: 'detections', label: '탐지 목록', icon: ShieldCheck, badge: detections.length },
+          { id: 'rag', label: 'AI Q&A', icon: Bot, badge: ragChunks.length > 0 ? 'RAG' : 0 },
           { id: 'patterns', label: '양식 패턴', icon: Layers, badge: patterns.length },
           { id: 'exceptions', label: '예외 관리', icon: EyeOff, badge: ignoredTerms.length },
         ].map((tab) => {
@@ -41,7 +44,7 @@ export default function Sidebar({
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex-1 flex items-center justify-center space-x-1.5 py-2 rounded-lg text-xs font-semibold transition ${
+              className={`flex-1 flex items-center justify-center space-x-1 py-2 rounded-lg text-[11px] font-semibold transition ${
                 activeTab === tab.id
                   ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -49,8 +52,8 @@ export default function Sidebar({
             >
               <Icon className="w-3.5 h-3.5" />
               <span>{tab.label}</span>
-              {tab.badge > 0 && (
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}`}>
+              {tab.badge !== 0 && (
+                <span className={`text-[9px] px-1 py-0.2 rounded-full font-mono ${activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}`}>
                   {tab.badge}
                 </span>
               )}
@@ -62,9 +65,7 @@ export default function Sidebar({
       {/* TAB 1: DETECTIONS LIST */}
       {activeTab === 'detections' && (
         <div className="flex-1 flex flex-col min-h-0">
-          {/* Controls Header */}
           <div className="p-3 border-b border-slate-800 space-y-2 bg-slate-900/40">
-            {/* Search Bar */}
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
               <input
@@ -76,7 +77,6 @@ export default function Sidebar({
               />
             </div>
 
-            {/* Quick Bulk Action */}
             <div className="flex items-center justify-between text-xs text-slate-400 px-1 pt-1">
               <button
                 onClick={() => onToggleAllDetections(true)}
@@ -98,7 +98,6 @@ export default function Sidebar({
             </div>
           </div>
 
-          {/* Items List */}
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5 custom-scrollbar">
             {filteredDetections.length === 0 ? (
               <div className="text-center py-12 text-slate-500 text-xs">
@@ -124,10 +123,8 @@ export default function Sidebar({
                       onSelectDetection(item);
                     }}
                   >
-                    {/* Item Top Meta */}
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center space-x-2">
-                        {/* Status Checkbox */}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -155,12 +152,10 @@ export default function Sidebar({
                       </span>
                     </div>
 
-                    {/* Detected Content */}
                     <div className="text-xs font-semibold text-slate-200 truncate pl-6 mb-2" title={item.detectedText}>
                       {item.detectedText}
                     </div>
 
-                    {/* Action buttons */}
                     <div className="flex items-center justify-end space-x-2 border-t border-slate-800/80 pt-1.5 opacity-80 group-hover:opacity-100 transition">
                       <button
                         onClick={(e) => {
@@ -182,7 +177,16 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* TAB 2: PAGE PATTERN CLUSTERS */}
+      {/* TAB 2: RAG AI Q&A CHAT */}
+      {activeTab === 'rag' && (
+        <RAGAssistantTab
+          ragChunks={ragChunks}
+          config={config}
+          onJumpToPage={onJumpToPage}
+        />
+      )}
+
+      {/* TAB 3: PAGE PATTERN CLUSTERS */}
       {activeTab === 'patterns' && (
         <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
           <div className="bg-indigo-500/10 border border-indigo-500/20 p-3 rounded-xl text-xs text-indigo-300">
@@ -228,7 +232,7 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* TAB 3: EXCEPTIONS & IGNORED TERMS */}
+      {/* TAB 4: EXCEPTIONS & IGNORED TERMS */}
       {activeTab === 'exceptions' && (
         <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
           <div className="text-xs text-slate-400 mb-2">무시(예외)로 지정되어 자동 탐지에서 제외된 단어 목록입니다.</div>

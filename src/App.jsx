@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import confetti from 'canvas-confetti';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
@@ -7,10 +7,11 @@ import SettingsModal from './components/SettingsModal';
 import PatternModal from './components/PatternModal';
 
 import { loadPdfDocument, extractPageTextItems } from './utils/pdfEngine';
-import { detectRegexPII, detectLLMPII, PII_TYPES } from './utils/piiDetector';
+import { detectRegexPII, detectLLMPII } from './utils/piiDetector';
 import { analyzeDocumentPatterns, replicateRedactionsToPatternPages } from './utils/patternAnalyzer';
 import { applyRedactionsToPdf } from './utils/pdfRedactor';
 import { generateSamplePdf } from './utils/samplePdfGenerator';
+import { buildDocumentRAGIndex } from './utils/ragEngine';
 
 export default function App() {
   const [pdfDoc, setPdfDoc] = useState(null);
@@ -20,6 +21,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
 
   const [pagesTextData, setPagesTextData] = useState([]);
+  const [ragChunks, setRagChunks] = useState([]);
   const [detections, setDetections] = useState([]);
   const [patterns, setPatterns] = useState([]);
   const [ignoredTerms, setIgnoredTerms] = useState([]);
@@ -48,7 +50,6 @@ export default function App() {
     localStorage.setItem('pdf_redactor_config', JSON.stringify(newConfig));
   };
 
-  // Process loaded PDF document
   const processPdf = async (buffer, name) => {
     setIsProcessing(true);
     setProcessingMessage('PDF 문서를 로드하고 텍스트 레이아웃을 분석 중입니다...');
@@ -61,7 +62,7 @@ export default function App() {
       setPageCount(doc.numPages);
       setCurrentPage(1);
 
-      // Extract text items across all pages
+      // 1. Extract text items across all pages
       const extractedPages = [];
       for (let p = 1; p <= doc.numPages; p++) {
         setProcessingMessage(`페이지 텍스트 추출 중... (${p} / ${doc.numPages})`);
@@ -70,19 +71,22 @@ export default function App() {
       }
       setPagesTextData(extractedPages);
 
-      // 1차: Fast Regex PII Detection
+      // 2. Build RAG Vector Context Index
+      setProcessingMessage('RAG 문서 검색 벡터 색인을 구축 중입니다...');
+      const chunks = buildDocumentRAGIndex(extractedPages);
+      setRagChunks(chunks);
+
+      // 3. Fast Regex PII Detection
       setProcessingMessage('주민번호, 전화번호 등 정규식 개인정보 탐지 중...');
       const regexDetections = detectRegexPII(extractedPages, ignoredTerms);
-
-      // Auto-approve 1st round regex detections for user convenience
       const approvedRegexDetections = regexDetections.map((d) => ({ ...d, status: 'approved' }));
 
-      // 2차: Page Layout Pattern Analysis
+      // 4. Page Layout Pattern Analysis
       setProcessingMessage('반복되는 서식 양식 패턴을 분석 중입니다...');
       const { patterns: detectedPatterns } = analyzeDocumentPatterns(extractedPages);
       setPatterns(detectedPatterns);
 
-      // 3차: Optional LLM Analysis
+      // 5. Optional LLM Analysis
       let llmDetections = [];
       if (config.provider !== 'regex') {
         setProcessingMessage(`AI (${config.provider.toUpperCase()}) 개인정보 문맥 분석 중...`);
@@ -101,7 +105,6 @@ export default function App() {
     }
   };
 
-  // Handle File Input Select
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -109,40 +112,32 @@ export default function App() {
     await processPdf(buffer, file.name);
   };
 
-  // Handle Sample PDF Generation
   const handleGenerateSample = async () => {
     const sampleBytes = await generateSamplePdf();
     await processPdf(sampleBytes.buffer, 'sample_korean_pii_document.pdf');
   };
 
-  // Toggle Single Detection Status (approved / pending)
   const handleToggleDetectionStatus = (detId) => {
     setDetections((prev) =>
       prev.map((d) => (d.id === detId ? { ...d, status: d.status === 'approved' ? 'pending' : 'approved' } : d))
     );
   };
 
-  // Toggle All Detections Status
   const handleToggleAllDetections = (approve) => {
     setDetections((prev) => prev.map((d) => ({ ...d, status: approve ? 'approved' : 'pending' })));
   };
 
-  // Add Ignore Term
   const handleIgnoreTerm = (term) => {
     if (!term || ignoredTerms.includes(term)) return;
     const newIgnored = [...ignoredTerms, term];
     setIgnoredTerms(newIgnored);
-
-    // Remove matching detections from active list
     setDetections((prev) => prev.filter((d) => !d.detectedText.toLowerCase().includes(term.toLowerCase())));
   };
 
-  // Remove Ignore Term
   const handleRemoveIgnoreTerm = (term) => {
     setIgnoredTerms((prev) => prev.filter((t) => t !== term));
   };
 
-  // Add Manual Redaction Box
   const handleAddManualRedaction = (manualData) => {
     const newDet = {
       id: `manual_${Date.now()}_${Math.random()}`,
@@ -152,9 +147,7 @@ export default function App() {
     setDetections((prev) => [...prev, newDet]);
   };
 
-  // Replicate Pattern Redactions across Pattern Cluster Pages
   const handleApplyPatternMasking = (pattern) => {
-    // Find approved redactions on the sample page of this pattern
     const sampleRedactions = detections.filter(
       (d) => d.pageNumber === pattern.samplePageNumber && d.status === 'approved'
     );
@@ -166,7 +159,6 @@ export default function App() {
 
     const replicated = replicateRedactionsToPatternPages(sampleRedactions, pattern.pages, pagesTextData);
 
-    // Merge new pattern redactions, avoiding duplicates
     setDetections((prev) => {
       const existingIds = new Set(prev.map((p) => p.id));
       const filteredNew = replicated.filter((r) => !existingIds.has(r.id));
@@ -176,7 +168,6 @@ export default function App() {
     confetti({ particleCount: 50, spread: 60, origin: { y: 0.8 } });
   };
 
-  // Save Redacted PDF (True Redaction)
   const handleSaveRedactedPdf = async () => {
     if (!pdfBuffer) return;
 
@@ -184,7 +175,6 @@ export default function App() {
     setProcessingMessage('PDF 내용 완전 삭제 및 비식별화(True Redaction) 처리 중...');
 
     try {
-      // Group approved redactions by page index
       const approvedByPage = {};
       detections
         .filter((d) => d.status === 'approved')
@@ -195,7 +185,6 @@ export default function App() {
 
       const redactedPdfBytes = await applyRedactionsToPdf(pdfBuffer, approvedByPage);
 
-      // Trigger Browser Download
       const blob = new Blob([redactedPdfBytes], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -220,7 +209,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased">
-      {/* Header Navbar */}
       <Navbar
         fileName={fileName}
         pageCount={pageCount}
@@ -233,14 +221,14 @@ export default function App() {
         providerInfo={config.provider}
       />
 
-      {/* Main Workspace */}
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Left Sidebar */}
         <Sidebar
           detections={detections}
           patterns={patterns}
           ignoredTerms={ignoredTerms}
           currentPage={currentPage}
+          ragChunks={ragChunks}
+          config={config}
           onSelectDetection={(item) => setCurrentPage(item.pageNumber)}
           onToggleDetectionStatus={handleToggleDetectionStatus}
           onToggleAllDetections={handleToggleAllDetections}
@@ -250,7 +238,6 @@ export default function App() {
           onJumpToPage={(p) => setCurrentPage(p)}
         />
 
-        {/* Center PDF Viewer */}
         {pdfDoc ? (
           <PDFCanvasViewer
             pdfDoc={pdfDoc}
@@ -266,9 +253,9 @@ export default function App() {
             <div className="w-20 h-20 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-6 shadow-2xl">
               <span className="text-4xl">🛡️</span>
             </div>
-            <h2 className="text-xl font-bold text-slate-100 mb-2">PDF 개인정보 비식별화 AI 프로그램</h2>
+            <h2 className="text-xl font-bold text-slate-100 mb-2">Redactify AI - RAG 기반 PDF 개인정보 탐지 & Q&A</h2>
             <p className="text-sm text-slate-400 max-w-md mb-8 leading-relaxed">
-              주민번호, 전화번호, 이메일 등 개인정보 자동 탐지 및 로컬 LLM 연동, 양식 패턴 분석을 통해 안전하게 마스킹을 수행하세요.
+              PDF 문서를 RAG 벡터 색인으로 자동 학습하여 질의응답(Q&A)을 수행하고 개인정보를 완벽하게 마스킹하세요.
             </p>
             <div className="flex items-center space-x-3">
               <button
@@ -286,7 +273,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Global Processing Loader Overlay */}
       {isProcessing && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
           <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -294,7 +280,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -302,7 +287,6 @@ export default function App() {
         onSaveConfig={saveConfig}
       />
 
-      {/* Pattern Application Confirm Modal */}
       <PatternModal
         isOpen={!!patternModalTarget}
         onClose={() => setPatternModalTarget(null)}
