@@ -53,7 +53,7 @@ export default function App() {
 
   const processPdf = async (buffer, name) => {
     setIsProcessing(true);
-    setProcessingMessage('PDF 문서를 로드하고 텍스트 레이아웃을 분석 중입니다...');
+    setProcessingMessage('PDF 문서를 로드하고 텍스트 레이아웃을 추출 중입니다...');
 
     try {
       const { pdfDoc: doc, originalBuffer } = await loadPdfDocument(buffer);
@@ -72,32 +72,32 @@ export default function App() {
       }
       setPagesTextData(extractedPages);
 
-      // 2. Build RAG Vector Index
+      // 2. Build RAG Vector Context Index
       setProcessingMessage('RAG 문서 검색 색인을 구축 중입니다...');
       const chunks = buildDocumentRAGIndex(extractedPages);
       setRagChunks(chunks);
 
-      // 3. ⭐️ 1차: AI 우선 식별 (AI-First Detection)
+      // 3. ⭐️ 1차: AI 우선 식별 (AI-First PII Engine)
       let aiDetections = [];
       if (config.provider !== 'regex') {
-        setProcessingMessage(`AI (${config.provider.toUpperCase()})로 성명, 학번, 사번, 주소 등 전체 개인정보 식별 중...`);
+        setProcessingMessage(`🤖 AI (${config.provider.toUpperCase()})로 성명(이름), 주소, 학번 등 전체 개인정보 식별 중...`);
         aiDetections = await detectLLMPII(extractedPages, config, (cur, total) => {
-          setProcessingMessage(`AI 정밀 탐지 진행 중... (${cur} / ${total} 페이지)`);
+          setProcessingMessage(`🤖 AI 정밀 탐지 진행 중... (${cur} / ${total} 페이지)`);
         });
       }
 
-      // 4. 2차: 보완 정규식(Regex) 탐지 (학번/전화/주민번호/이메일)
-      setProcessingMessage('정규식(Regex) 보완 탐지 및 패턴 결합 중...');
+      // 4. 2차: 보완 정규식(Regex) 탐지 (주민번호/전화/이메일/계좌)
+      setProcessingMessage('⚡ 정규식(Regex) 보완 탐지 결합 중...');
       const regexDetections = detectRegexPII(extractedPages, ignoredTerms);
 
       // 5. 3차: 서식 양식 패턴 클러스터링
       const { patterns: detectedPatterns } = analyzeDocumentPatterns(extractedPages);
       setPatterns(detectedPatterns);
 
-      // Merge findings with unique bounds/text
+      // Combine AI & Regex detections with no duplicates
       const combined = [...aiDetections];
       regexDetections.forEach((rd) => {
-        if (!combined.some((cd) => cd.pageIndex === rd.pageIndex && cd.detectedText === rd.detectedText)) {
+        if (!combined.some((cd) => cd.pageIndex === rd.pageIndex && cd.detectedText.trim() === rd.detectedText.trim())) {
           combined.push(rd);
         }
       });
@@ -260,9 +260,9 @@ export default function App() {
             <div className="w-20 h-20 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-6 shadow-2xl">
               <span className="text-4xl">🛡️</span>
             </div>
-            <h2 className="text-xl font-bold text-slate-100 mb-2">Redactify AI - AI 우선 개인정보 식별 & RAG 시스템</h2>
+            <h2 className="text-xl font-bold text-slate-100 mb-2">Redactify AI - AI 우선 개인정보 탐지 시스템</h2>
             <p className="text-sm text-slate-400 max-w-md mb-8 leading-relaxed">
-              AI가 성명, 학번, 사번, 주소 등 문서 내 모든 개인정보를 우선 정밀 조율하여 누락 없이 마스킹합니다.
+              PDF를 불러오면 AI가 성명, 학번, 사번, 주소 등 모든 개인정보를 우선 정밀 탐지하여 누락 없이 마스킹합니다.
             </p>
             <div className="flex items-center space-x-3">
               <button

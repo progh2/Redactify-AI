@@ -1,6 +1,6 @@
 /**
  * AI-First PII Detection Engine - Queries AI First for Comprehensive PII Identification
- * Captures Names, Student IDs (학번), Employee IDs (사번), RRN, Phone, Address, Bank Accounts, etc.
+ * Captures Korean Names (성명/이름), Student IDs (학번), Employee IDs (사번), RRN, Phone, Address, Bank Accounts, etc.
  */
 
 import { fetchWithTimeout } from './fetchWithTimeout';
@@ -8,12 +8,12 @@ import { fetchWithTimeout } from './fetchWithTimeout';
 export const PII_TYPES = {
   NAME: { key: 'NAME', name: '성명 / 인명 (AI)', color: '#a855f7', category: 'AI' },
   ID_NUM: { key: 'ID_NUM', name: '학번 / 사번 / 식별번호 (AI)', color: '#f59e0b', category: 'AI' },
+  ADDRESS: { key: 'ADDRESS', name: '상세주소 (AI)', color: '#06b6d4', category: 'AI' },
   RRN: { key: 'RRN', name: '주민등록번호 / 외국인번호', color: '#ef4444', category: 'Regex' },
   PHONE: { key: 'PHONE', name: '전화번호 / 핸드폰', color: '#f97316', category: 'Regex' },
   EMAIL: { key: 'EMAIL', name: '이메일 주소', color: '#3b82f6', category: 'Regex' },
   ACCOUNT: { key: 'ACCOUNT', name: '계좌번호 / 카드번호', color: '#8b5cf6', category: 'Regex' },
   PASSPORT: { key: 'PASSPORT', name: '여권번호 / 운전면허번호', color: '#ec4899', category: 'Regex' },
-  ADDRESS: { key: 'ADDRESS', name: '상세주소 (AI)', color: '#06b6d4', category: 'AI' },
   BUSINESS_NO: { key: 'BUSINESS_NO', name: '사업자등록번호', color: '#14b8a6', category: 'Regex' },
   SENSITIVE: { key: 'SENSITIVE', name: '기타 민감정보 (AI)', color: '#eab308', category: 'AI' },
   PATTERN: { key: 'PATTERN', name: '반복 서식 패턴', color: '#2563eb', category: 'Pattern' },
@@ -45,7 +45,6 @@ const REGEX_PATTERNS = [
     type: PII_TYPES.BUSINESS_NO,
     regex: /\b\d{3}[-─\s]\d{2}[-─\s]\d{5}\b/g,
   },
-  // 학번 / 사번 패턴 추가 (예: 2012-12311 또는 20231234)
   {
     type: PII_TYPES.ID_NUM,
     regex: /\b\d{4}[-─\s]?\d{4,6}\b/g,
@@ -84,13 +83,24 @@ export async function detectLLMPII(pagesTextData, config, onProgress) {
         timeoutSeconds,
       });
 
-      piiItems.forEach((piiEntity, idx) => {
-        const targetText = piiEntity.text || piiEntity.value;
-        if (!targetText || targetText.trim().length < 2) return;
+      console.log(`[AI PII Detection Page ${pageData.pageNumber}] Found ${piiItems.length} items:`, piiItems);
 
-        // Match targetText back to exact page text items
+      piiItems.forEach((piiEntity, idx) => {
+        const targetText = (piiEntity.text || piiEntity.value || '').trim();
+        if (!targetText || targetText.length < 2) return;
+
+        // Split multi-word targets (e.g. "서울시 관악구 호암로 546") into tokens for matching
+        const words = targetText.split(/\s+/).filter((w) => w.length >= 2);
+
         pageData.items.forEach((item) => {
-          if (item.text.includes(targetText) || targetText.includes(item.text.trim())) {
+          const itemTextTrim = item.text.trim();
+          if (!itemTextTrim) return;
+
+          // Direct match OR word overlap match
+          const isDirectMatch = itemTextTrim.includes(targetText) || targetText.includes(itemTextTrim);
+          const isWordOverlap = words.some((w) => itemTextTrim.includes(w));
+
+          if (isDirectMatch || isWordOverlap) {
             let typeKey = 'SENSITIVE';
             const cat = (piiEntity.category || '').toUpperCase();
 
@@ -101,7 +111,7 @@ export async function detectLLMPII(pagesTextData, config, onProgress) {
             else if (cat.includes('ACCOUNT') || cat.includes('계좌')) typeKey = 'ACCOUNT';
 
             const typeObj = PII_TYPES[typeKey] || PII_TYPES.SENSITIVE;
-            const uniqueId = `ai_p${pageData.pageIndex}_i${idx}_${item.id}`;
+            const uniqueId = `ai_p${pageData.pageIndex}_${typeKey}_${item.id}`;
 
             if (!detections.some((d) => d.id === uniqueId)) {
               detections.push({
@@ -121,7 +131,7 @@ export async function detectLLMPII(pagesTextData, config, onProgress) {
                   height: item.height,
                   pdfY: item.pdfY,
                 },
-                status: 'approved', // Auto-approve AI findings by default!
+                status: 'approved', // Auto-approve AI findings
               });
             }
           }
@@ -179,7 +189,7 @@ export function detectRegexPII(pagesTextData, ignoredTerms = []) {
                 height: item.height,
                 pdfY: item.pdfY,
               },
-              status: 'approved', // Auto-approve Regex findings
+              status: 'approved',
             });
           }
         }
@@ -191,19 +201,17 @@ export function detectRegexPII(pagesTextData, ignoredTerms = []) {
 }
 
 async function callLLMForPII(text, provider, credentials) {
-  const prompt = `Analyze the following document text and identify ALL Personal Identifiable Information (PII) and sensitive personal data.
-Identify any of the following:
-1. Person Names (성명, 이름)
-2. Student Numbers / Employee IDs / Member IDs (학번, 사번, 식별번호, 회원번호)
-3. National ID / Resident Registration / Passports / Driver Licenses (주민등록번호, 외국인번호, 여권번호)
-4. Phone Numbers / Mobile numbers (전화번호, 핸드폰번호)
-5. Emails (이메일 주소)
-6. Addresses / Locations (주소, 거주지)
-7. Bank Account Numbers / Credit Cards (계좌번호, 카드번호)
+  // Korean-tailored strict JSON prompt for high accuracy on Korean PDF documents
+  const prompt = `다음 문서 텍스트에서 포함된 모든 개인정보(성명/이름, 학번, 사번, 주민등록번호, 전화번호, 이메일, 주소, 계좌번호 등)를 정확히 찾아내세요.
+반드시 다른 설명이나 문장 없이, 오직 아래와 같은 JSON 배열 형식으로만 응답하세요.
 
-Return ONLY a valid JSON array of objects with keys "text" and "category" (where category is one of "NAME", "ID_NUM", "PHONE", "EMAIL", "ADDRESS", "ACCOUNT", "SENSITIVE"). Do NOT return markdown formatting or extra text.
+[
+  {"text": "홍길동", "category": "NAME"},
+  {"text": "2012-12311", "category": "ID_NUM"},
+  {"text": "서울시 관악구 호암로 546", "category": "ADDRESS"}
+]
 
-Document Text:
+문서 텍스트:
 "${text}"`;
 
   const timeoutMs = (credentials.timeoutSeconds || 90) * 1000;
@@ -277,16 +285,24 @@ Document Text:
   return [];
 }
 
+/**
+ * Cleanly parse JSON array output from LLM, stripping markdown codeblocks if present
+ */
 function parseLLMJsonResponse(rawText) {
+  if (!rawText) return [];
+
+  // Strip markdown ```json ... ``` codeblocks
+  let cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+
   try {
-    const jsonStart = rawText.indexOf('[');
-    const jsonEnd = rawText.lastIndexOf(']');
+    const jsonStart = cleaned.indexOf('[');
+    const jsonEnd = cleaned.lastIndexOf(']');
 
     if (jsonStart !== -1 && jsonEnd !== -1) {
-      const jsonSubStr = rawText.substring(jsonStart, jsonEnd + 1);
+      const jsonSubStr = cleaned.substring(jsonStart, jsonEnd + 1);
       return JSON.parse(jsonSubStr);
     }
-    const parsed = JSON.parse(rawText);
+    const parsed = JSON.parse(cleaned);
     return Array.isArray(parsed) ? parsed : parsed.pii || [];
   } catch (e) {
     console.warn('Failed to parse LLM JSON response:', rawText);
