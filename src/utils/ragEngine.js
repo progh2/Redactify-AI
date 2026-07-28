@@ -1,5 +1,5 @@
 /**
- * RAG (Retrieval-Augmented Generation) Engine for PDF Documents with Timeout Abort Handling
+ * RAG (Retrieval-Augmented Generation) Engine for PDF Documents with Real-time Streaming
  */
 
 import { fetchWithTimeout } from './fetchWithTimeout';
@@ -77,14 +77,17 @@ export function retrieveRelevantChunks(query, chunks, topK = 4) {
   return results.length > 0 ? results : chunks.slice(0, topK);
 }
 
-export async function askRAGQuestion(question, ragChunks, config) {
+/**
+ * Ask Question using RAG pipeline with optional real-time streaming callback
+ */
+export async function askRAGQuestion(question, ragChunks, config, onChunk) {
   const {
     provider = 'ollama',
     ollamaUrl = 'http://localhost:11434',
     ollamaModel = 'llama3',
     claudeKey = '',
     openaiKey = '',
-    timeoutSeconds = 15,
+    timeoutSeconds = 90,
   } = config;
 
   const relevantChunks = retrieveRelevantChunks(question, ragChunks, 5);
@@ -104,8 +107,8 @@ ${contextText}
 
 User Question: ${question}`;
 
-  let answerText = '';
-  const timeoutMs = (timeoutSeconds || 15) * 1000;
+  let fullAnswerText = '';
+  const timeoutMs = (timeoutSeconds || 90) * 1000;
 
   if (provider === 'ollama') {
     const res = await fetchWithTimeout(
@@ -116,15 +119,47 @@ User Question: ${question}`;
         body: JSON.stringify({
           model: ollamaModel,
           messages: [{ role: 'user', content: systemPrompt }],
-          stream: false,
+          stream: true, // Enable streaming to receive tokens instantly!
         }),
       },
       timeoutMs
     );
 
     if (!res.ok) throw new Error(`Ollama API error (${res.status}). Make sure Ollama server is running.`);
-    const data = await res.json();
-    answerText = data.message?.content || '답변을 생성할 수 없습니다.';
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          const chunkContent = parsed.message?.content || '';
+          if (chunkContent) {
+            fullAnswerText += chunkContent;
+            if (onChunk) onChunk(fullAnswerText);
+          }
+        } catch (e) {
+          // ignore partial JSON parse error
+        }
+      }
+    }
+
+    if (!fullAnswerText && buffer.trim()) {
+      try {
+        const parsed = JSON.parse(buffer);
+        fullAnswerText += parsed.message?.content || '';
+      } catch (e) {}
+    }
   } else if (provider === 'openai') {
     const res = await fetchWithTimeout(
       'https://api.openai.com/v1/chat/completions',
@@ -143,7 +178,8 @@ User Question: ${question}`;
     );
     if (!res.ok) throw new Error(`OpenAI API error (${res.status})`);
     const data = await res.json();
-    answerText = data.choices[0]?.message?.content || '';
+    fullAnswerText = data.choices[0]?.message?.content || '';
+    if (onChunk) onChunk(fullAnswerText);
   } else if (provider === 'claude') {
     const res = await fetchWithTimeout(
       'https://api.anthropic.com/v1/messages',
@@ -165,16 +201,18 @@ User Question: ${question}`;
     );
     if (!res.ok) throw new Error(`Claude API error (${res.status})`);
     const data = await res.json();
-    answerText = data.content[0]?.text || '';
+    fullAnswerText = data.content[0]?.text || '';
+    if (onChunk) onChunk(fullAnswerText);
   } else {
-    answerText =
+    fullAnswerText =
       `[Regex 전용 모드 답변]\n조회된 연관 문맥 (페이지: ${relevantChunks.map((c) => 'P.' + c.pageNumber).join(', ')}):\n\n` +
       relevantChunks.map((c) => `P.${c.pageNumber}: ${c.text}`).join('\n\n');
+    if (onChunk) onChunk(fullAnswerText);
   }
 
   return {
     question,
-    answer: answerText,
+    answer: fullAnswerText,
     referencedPages: [...new Set(relevantChunks.map((c) => c.pageNumber))],
     relevantChunks,
   };

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MessageSquareText, Send, Sparkles, Bot, User, CornerDownRight, FileText, Loader2, ArrowRight } from 'lucide-react';
+import { Bot, User, Sparkles, Send, FileText, Loader2, ArrowRight } from 'lucide-react';
 import { askRAGQuestion } from '../utils/ragEngine';
 
 export default function RAGAssistantTab({ ragChunks, config, onJumpToPage }) {
@@ -7,7 +7,7 @@ export default function RAGAssistantTab({ ragChunks, config, onJumpToPage }) {
     {
       id: 'welcome',
       sender: 'ai',
-      text: '안녕하세요! 업로드하신 PDF 문서에 대해 질문해주세요. AI가 문서를 직접 RAG 벡터 검색하여 정확한 답변과 관련 페이지를 찾아드립니다.',
+      text: '안녕하세요! 업로드하신 PDF 문서에 대해 질문해주세요. AI가 문서를 직접 RAG 벡터 검색하여 실시간 스트리밍 답변과 관련 페이지를 찾아드립니다.',
       referencedPages: [],
     },
   ]);
@@ -30,31 +30,50 @@ export default function RAGAssistantTab({ ragChunks, config, onJumpToPage }) {
       text: textToSend,
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const aiMsgId = `ai_${Date.now()}`;
+    const initialAiMsg = {
+      id: aiMsgId,
+      sender: 'ai',
+      text: '',
+      referencedPages: [],
+    };
+
+    setMessages((prev) => [...prev, userMsg, initialAiMsg]);
     setInputQuery('');
     setIsAsking(true);
 
     try {
-      const ragResult = await askRAGQuestion(textToSend, ragChunks, config);
+      const ragResult = await askRAGQuestion(textToSend, ragChunks, config, (partialText) => {
+        // Real-time streaming token update
+        setMessages((prev) =>
+          prev.map((msg) => (msg.id === aiMsgId ? { ...msg, text: partialText } : msg))
+        );
+      });
 
-      const aiMsg = {
-        id: `ai_${Date.now()}`,
-        sender: 'ai',
-        text: ragResult.answer,
-        referencedPages: ragResult.referencedPages,
-      };
-
-      setMessages((prev) => [...prev, aiMsg]);
+      // Update final referenced pages & complete text
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === aiMsgId
+            ? {
+                ...msg,
+                text: ragResult.answer || '답변 생성이 완료되었습니다.',
+                referencedPages: ragResult.referencedPages,
+              }
+            : msg
+        )
+      );
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `err_${Date.now()}`,
-          sender: 'ai',
-          text: `오류가 발생했습니다: ${err.message || 'AI 답변 생성 실패'}. 설정에서 AI 엔지나 API Key를 확인해주세요.`,
-          referencedPages: [],
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === aiMsgId
+            ? {
+                ...msg,
+                text: `오류가 발생했습니다: ${err.message || 'AI 답변 생성 실패'}. 설정에서 AI 엔진이나 타임아웃 설정을 확인해 주세요.`,
+                referencedPages: [],
+              }
+            : msg
+        )
+      );
     } finally {
       setIsAsking(false);
     }
@@ -69,12 +88,12 @@ export default function RAGAssistantTab({ ragChunks, config, onJumpToPage }) {
         </div>
         <div>
           <h3 className="font-bold text-xs text-slate-100 flex items-center gap-1.5">
-            AI RAG 질의응답 (Q&A)
-            <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-mono">
-              {config.provider.toUpperCase()}
+            AI RAG 실시간 질의응답
+            <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-mono uppercase">
+              {config.provider} (Streaming)
             </span>
           </h3>
-          <p className="text-[10px] text-slate-400">문서 문맥을 RAG로 학습/검색하여 답변합니다.</p>
+          <p className="text-[10px] text-slate-400">RAG 벡터 색인 기반 실시간 스트리밍 답변</p>
         </div>
       </div>
 
@@ -106,7 +125,16 @@ export default function RAGAssistantTab({ ragChunks, config, onJumpToPage }) {
                   : 'bg-slate-800/80 border border-slate-700/60 text-slate-200 rounded-bl-none whitespace-pre-wrap'
               }`}
             >
-              {msg.text}
+              {msg.text ? (
+                msg.text
+              ) : isAsking && msg.sender === 'ai' ? (
+                <div className="flex items-center space-x-2 text-indigo-400 font-medium">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>로컬 LLM 모델 로딩 및 실시간 답변 답변 준비 중...</span>
+                </div>
+              ) : (
+                ''
+              )}
 
               {/* Page References Clickable Chips */}
               {msg.referencedPages && msg.referencedPages.length > 0 && (
@@ -127,13 +155,6 @@ export default function RAGAssistantTab({ ragChunks, config, onJumpToPage }) {
             </div>
           </div>
         ))}
-
-        {isAsking && (
-          <div className="flex items-center space-x-2 text-xs text-indigo-400 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 animate-pulse">
-            <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-            <span>RAG 벡터 DB 문맥 탐색 및 AI 답변 생성 중...</span>
-          </div>
-        )}
       </div>
 
       {/* Suggested Prompts */}
