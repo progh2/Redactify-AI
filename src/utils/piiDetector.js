@@ -1,6 +1,8 @@
 /**
- * PII Detection Engine - Supports Regex Rules & LLM (Ollama, Claude, OpenAI)
+ * PII Detection Engine - Supports Regex Rules & LLM (Ollama, Claude, OpenAI) with Timeout Control
  */
+
+import { fetchWithTimeout } from './fetchWithTimeout';
 
 export const PII_TYPES = {
   RRN: { key: 'RRN', name: '주민등록번호 / 외국인번호', color: '#ef4444', category: 'Regex' },
@@ -67,10 +69,8 @@ export function detectRegexPII(pagesTextData, ignoredTerms = []) {
 
           if (lowerIgnored.includes(matchedText.toLowerCase())) continue;
 
-          // Unique ID using item.id, type.key, match index
           const uniqueId = `det_${pageIndex}_${item.id}_${type.key}_${match.index}`;
 
-          // Prevent pushing duplicate entries with same unique ID
           if (!detections.some((d) => d.id === uniqueId)) {
             detections.push({
               id: uniqueId,
@@ -101,10 +101,17 @@ export function detectRegexPII(pagesTextData, ignoredTerms = []) {
 }
 
 /**
- * 2. LLM Detection (Ollama / Claude / OpenAI)
+ * 2. LLM Detection (Ollama / Claude / OpenAI) with Timeout
  */
 export async function detectLLMPII(pagesTextData, config, onProgress) {
-  const { provider = 'ollama', ollamaUrl = 'http://localhost:11434', ollamaModel = 'llama3', claudeKey = '', openaiKey = '' } = config;
+  const {
+    provider = 'ollama',
+    ollamaUrl = 'http://localhost:11434',
+    ollamaModel = 'llama3',
+    claudeKey = '',
+    openaiKey = '',
+    timeoutSeconds = 15,
+  } = config;
 
   const detections = [];
   const totalPages = pagesTextData.length;
@@ -117,7 +124,13 @@ export async function detectLLMPII(pagesTextData, config, onProgress) {
     if (!fullPageText.trim()) continue;
 
     try {
-      const piiItems = await callLLMForPII(fullPageText, provider, { ollamaUrl, ollamaModel, claudeKey, openaiKey });
+      const piiItems = await callLLMForPII(fullPageText, provider, {
+        ollamaUrl,
+        ollamaModel,
+        claudeKey,
+        openaiKey,
+        timeoutSeconds,
+      });
 
       piiItems.forEach((piiEntity, idx) => {
         const targetText = piiEntity.text || piiEntity.value;
@@ -155,7 +168,7 @@ export async function detectLLMPII(pagesTextData, config, onProgress) {
         }
       });
     } catch (err) {
-      console.warn(`LLM analysis failed on page ${pageData.pageNumber}:`, err);
+      console.warn(`LLM analysis failed/timed out on page ${pageData.pageNumber}:`, err.message);
     }
   }
 
@@ -169,16 +182,22 @@ async function callLLMForPII(text, provider, credentials) {
   Document Text:
   "${text}"`;
 
+  const timeoutMs = (credentials.timeoutSeconds || 15) * 1000;
+
   if (provider === 'ollama') {
-    const res = await fetch(`${credentials.ollamaUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: credentials.ollamaModel,
-        messages: [{ role: 'user', content: prompt }],
-        stream: false,
-      }),
-    });
+    const res = await fetchWithTimeout(
+      `${credentials.ollamaUrl}/api/chat`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: credentials.ollamaModel,
+          messages: [{ role: 'user', content: prompt }],
+          stream: false,
+        }),
+      },
+      timeoutMs
+    );
 
     if (!res.ok) throw new Error(`Ollama connection error (${res.status})`);
     const data = await res.json();
@@ -186,38 +205,46 @@ async function callLLMForPII(text, provider, credentials) {
   }
 
   if (provider === 'openai') {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${credentials.openaiKey}`,
+    const res = await fetchWithTimeout(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${credentials.openaiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' },
+        }),
       },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-      }),
-    });
+      timeoutMs
+    );
     if (!res.ok) throw new Error(`OpenAI API error (${res.status})`);
     const data = await res.json();
     return parseLLMJsonResponse(data.choices[0]?.message?.content || '');
   }
 
   if (provider === 'claude') {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': credentials.claudeKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
+    const res = await fetchWithTimeout(
+      'https://api.anthropic.com/v1/messages',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': credentials.claudeKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        }),
       },
-      body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
+      timeoutMs
+    );
     if (!res.ok) throw new Error(`Claude API error (${res.status})`);
     const data = await res.json();
     return parseLLMJsonResponse(data.content[0]?.text || '');

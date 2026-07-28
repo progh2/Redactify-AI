@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { X, Server, Key, Cpu, Check, AlertCircle, RefreshCw, Lock } from 'lucide-react';
+import { X, Server, Cpu, Check, AlertCircle, RefreshCw, Lock, Clock } from 'lucide-react';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 export default function SettingsModal({ isOpen, onClose, config, onSaveConfig }) {
   if (!isOpen) return null;
@@ -9,6 +10,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSaveConfig })
   const [ollamaModel, setOllamaModel] = useState(config.ollamaModel || 'llama3');
   const [claudeKey, setClaudeKey] = useState(config.claudeKey || '');
   const [openaiKey, setOpenaiKey] = useState(config.openaiKey || '');
+  const [timeoutSeconds, setTimeoutSeconds] = useState(config.timeoutSeconds || 15);
   const [testStatus, setTestStatus] = useState(null); // null, 'testing', 'success', 'error'
   const [testMessage, setTestMessage] = useState('');
 
@@ -18,7 +20,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSaveConfig })
 
     try {
       if (provider === 'ollama') {
-        const res = await fetch(`${ollamaUrl}/api/tags`);
+        const res = await fetchWithTimeout(`${ollamaUrl}/api/tags`, {}, timeoutSeconds * 1000);
         if (res.ok) {
           const data = await res.json();
           const models = data.models ? data.models.map((m) => m.name) : [];
@@ -44,6 +46,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSaveConfig })
       ollamaModel,
       claudeKey,
       openaiKey,
+      timeoutSeconds: Number(timeoutSeconds),
     });
     onClose();
   };
@@ -59,7 +62,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSaveConfig })
             </div>
             <div>
               <h3 className="font-bold text-slate-100">AI 및 LLM 탐지 설정</h3>
-              <p className="text-xs text-slate-400">개인정보 분석에 사용할 AI 엔진 및 API 키를 설정합니다.</p>
+              <p className="text-xs text-slate-400">개인정보 분석 및 RAG Q&A에 사용할 AI 엔진 및 타임아웃을 설정합니다.</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
@@ -146,7 +149,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSaveConfig })
                 placeholder="sk-ant-api03-..."
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
               />
-              <p className="text-[11px] text-slate-500">Claude 3.5 Sonnet 모델을 이용해 이름 및 문맥 개인정보를 분석합니다.</p>
             </div>
           )}
 
@@ -160,15 +162,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSaveConfig })
                 placeholder="sk-..."
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
               />
-              <p className="text-[11px] text-slate-500">GPT-4o-mini 모델을 이용해 정밀한 개인정보 식별을 수행합니다.</p>
             </div>
           )}
 
-          {provider === 'regex' && (
-            <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-xl text-xs text-amber-300">
-              ⚡ 정규식(Regex) 탐지만 사용합니다. 주민등록번호, 전화번호, 이메일, 계좌번호 등 고정 패턴만 빠르게 검색합니다.
+          {/* Response Timeout Control */}
+          <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-amber-400" /> AI 응답 제한 시간 (타임아웃 컷)
+              </span>
+              <span className="text-xs font-mono font-bold text-amber-400">{timeoutSeconds}초</span>
             </div>
-          )}
+            <input
+              type="range"
+              min="5"
+              max="60"
+              step="5"
+              value={timeoutSeconds}
+              onChange={(e) => setTimeoutSeconds(e.target.value)}
+              className="w-full accent-amber-500 cursor-pointer"
+            />
+            <p className="text-[11px] text-slate-400">
+              지정한 시간 동안 AI 답변이 없을 경우 요청을 자동으로 중단(컷)하여 무한 대기를 방지합니다.
+            </p>
+          </div>
 
           {/* Connection Test Status */}
           {testStatus && (
