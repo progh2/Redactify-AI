@@ -1,5 +1,6 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -13,19 +14,22 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      webSecurity: false, // Enables local CORS for Ollama and local PDF loading
+      webSecurity: false,
     },
   });
 
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+  const distPath = path.join(__dirname, '../dist/index.html');
 
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL(devServerUrl);
+  // Load standalone dist/index.html if built, or fallback to dev server URL
+  if (fs.existsSync(distPath)) {
+    mainWindow.loadFile(distPath);
+  } else if (process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(distPath);
   }
 
-  // Open links in external browser
+  // Open external links in default OS browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };

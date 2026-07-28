@@ -5,8 +5,9 @@
   "type": "commonjs",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "vite",
-    "electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "start": "vite build && electron .",
+    "app": "vite build && electron .",
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "dist": "vite build && electron-builder"
   },

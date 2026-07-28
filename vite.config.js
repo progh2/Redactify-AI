@@ -5,4 +5,8 @@ import tailwindcss from '@tailwindcss/vite';
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  base: './', // Crucial for standalone Electron file:// loading
+  server: {
+    open: false, // Ensure Vite server never auto-opens a web browser window
+  },
 });
