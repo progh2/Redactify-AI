@@ -16,11 +16,10 @@ export const PII_TYPES = {
   MANUAL: { key: 'MANUAL', name: '사용자 수동 지정', color: '#10b981', category: 'Manual' },
 };
 
-// Regex patterns for Korean & Standard PII
 const REGEX_PATTERNS = [
   {
     type: PII_TYPES.RRN,
-    regex: /(?:\b\d{6}[-─\s]?[1-4]\d{6}\b)|(?:\b\d{6}[-─\s]?[5-8]\d{6}\b)/g, // 주민번호 및 외국인번호
+    regex: /(?:\b\d{6}[-─\s]?[1-4]\d{6}\b)|(?:\b\d{6}[-─\s]?[5-8]\d{6}\b)/g,
   },
   {
     type: PII_TYPES.PHONE,
@@ -54,7 +53,6 @@ export function detectRegexPII(pagesTextData, ignoredTerms = []) {
   pagesTextData.forEach((pageData) => {
     const { pageIndex, pageNumber, items } = pageData;
 
-    // Join page text to find multiline or concatenated matches if needed, but item-level matching is precise
     items.forEach((item) => {
       const text = item.text;
       if (!text || text.trim().length === 0) return;
@@ -69,25 +67,31 @@ export function detectRegexPII(pagesTextData, ignoredTerms = []) {
 
           if (lowerIgnored.includes(matchedText.toLowerCase())) continue;
 
-          detections.push({
-            id: `det_${pageIndex}_${item.id}_${match.index}`,
-            pageIndex,
-            pageNumber,
-            type: type.key,
-            typeName: type.name,
-            typeColor: type.color,
-            category: 'Regex',
-            detectedText: matchedText,
-            fullItemText: text,
-            bounds: {
-              x: item.x,
-              y: item.y,
-              width: item.width,
-              height: item.height,
-              pdfY: item.pdfY,
-            },
-            status: 'pending', // pending, approved, ignored
-          });
+          // Unique ID using item.id, type.key, match index
+          const uniqueId = `det_${pageIndex}_${item.id}_${type.key}_${match.index}`;
+
+          // Prevent pushing duplicate entries with same unique ID
+          if (!detections.some((d) => d.id === uniqueId)) {
+            detections.push({
+              id: uniqueId,
+              pageIndex,
+              pageNumber,
+              type: type.key,
+              typeName: type.name,
+              typeColor: type.color,
+              category: 'Regex',
+              detectedText: matchedText,
+              fullItemText: text,
+              bounds: {
+                x: item.x,
+                y: item.y,
+                width: item.width,
+                height: item.height,
+                pdfY: item.pdfY,
+              },
+              status: 'pending',
+            });
+          }
         }
       });
     });
@@ -115,38 +119,39 @@ export async function detectLLMPII(pagesTextData, config, onProgress) {
     try {
       const piiItems = await callLLMForPII(fullPageText, provider, { ollamaUrl, ollamaModel, claudeKey, openaiKey });
 
-      // Match returned PII entities (names, addresses) back to page items
       piiItems.forEach((piiEntity, idx) => {
         const targetText = piiEntity.text || piiEntity.value;
         if (!targetText) return;
 
-        // Find matching text item on page
         const matchedItem = pageData.items.find((item) => item.text.includes(targetText) || targetText.includes(item.text));
 
         if (matchedItem) {
           const typeKey = piiEntity.category === 'NAME' ? 'NAME' : piiEntity.category === 'ADDRESS' ? 'ADDRESS' : 'SENSITIVE';
 
           const typeObj = PII_TYPES[typeKey] || PII_TYPES.SENSITIVE;
+          const uniqueId = `llm_p${pageData.pageIndex}_i${idx}_${matchedItem.id}`;
 
-          detections.push({
-            id: `llm_${pageData.pageIndex}_${idx}_${Date.now()}`,
-            pageIndex: pageData.pageIndex,
-            pageNumber: pageData.pageNumber,
-            type: typeObj.key,
-            typeName: typeObj.name,
-            typeColor: typeObj.color,
-            category: 'LLM',
-            detectedText: targetText,
-            fullItemText: matchedItem.text,
-            bounds: {
-              x: matchedItem.x,
-              y: matchedItem.y,
-              width: matchedItem.width,
-              height: matchedItem.height,
-              pdfY: matchedItem.pdfY,
-            },
-            status: 'pending',
-          });
+          if (!detections.some((d) => d.id === uniqueId)) {
+            detections.push({
+              id: uniqueId,
+              pageIndex: pageData.pageIndex,
+              pageNumber: pageData.pageNumber,
+              type: typeObj.key,
+              typeName: typeObj.name,
+              typeColor: typeObj.color,
+              category: 'LLM',
+              detectedText: targetText,
+              fullItemText: matchedItem.text,
+              bounds: {
+                x: matchedItem.x,
+                y: matchedItem.y,
+                width: matchedItem.width,
+                height: matchedItem.height,
+                pdfY: matchedItem.pdfY,
+              },
+              status: 'pending',
+            });
+          }
         }
       });
     } catch (err) {
@@ -157,9 +162,6 @@ export async function detectLLMPII(pagesTextData, config, onProgress) {
   return detections;
 }
 
-/**
- * Call specified LLM Provider API
- */
 async function callLLMForPII(text, provider, credentials) {
   const prompt = `Analyze the following text from a document and identify all Personal Identifiable Information (PII) such as Names (성명), Addresses (주소), and sensitive personal identifiers.
   Return ONLY a valid JSON array of objects with keys "text" and "category" (where category is one of "NAME", "ADDRESS", "SENSITIVE"). Do NOT return markdown formatting or extra text.
@@ -224,9 +226,6 @@ async function callLLMForPII(text, provider, credentials) {
   return [];
 }
 
-/**
- * Cleanly extract JSON array from LLM string output
- */
 function parseLLMJsonResponse(rawText) {
   try {
     const jsonStart = rawText.indexOf('[');

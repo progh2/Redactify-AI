@@ -5,6 +5,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs
 
 /**
  * Load PDF Document from File or ArrayBuffer
+ * Slices the buffer so worker transfer doesn't detach original ArrayBuffer
  */
 export async function loadPdfDocument(fileOrArrayBuffer) {
   let buffer;
@@ -18,7 +19,9 @@ export async function loadPdfDocument(fileOrArrayBuffer) {
     throw new Error('Unsupported PDF data source');
   }
 
-  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+  // Clone buffer so worker does not detach original for pdf-lib
+  const bufferCopy = buffer.slice(0);
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(bufferCopy) });
   const pdfDoc = await loadingTask.promise;
   return { pdfDoc, originalBuffer: buffer };
 }
@@ -57,14 +60,12 @@ export async function extractPageTextItems(pdfDoc, pageNumber) {
     const item = textContent.items[i];
     if (!item.str || item.str.trim() === '') continue;
 
-    // Transform matrix: [scaleX, skewY, skewX, scaleY, translateX, translateY]
     const tx = item.transform;
     const x = tx[4];
     const y = tx[5];
     const width = item.width || 10;
     const height = item.height || Math.abs(tx[3]) || 12;
 
-    // PDF Y-axis is inverted (0,0 is bottom-left). Convert to top-left origin:
     const pdfHeight = viewport.height;
     const topY = pdfHeight - y - height;
 
